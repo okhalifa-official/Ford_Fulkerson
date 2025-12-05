@@ -1,4 +1,5 @@
 #include <iostream>
+#include <algorithm>
 #include <vector>
 #include <queue>
 #include <climits>
@@ -113,6 +114,7 @@ int main()
 
     int N, E;
     cin >> N >> E;
+
     vector<vector<pair<int, int>>> g(N);
     for (int i = 0; i < E; i++)
     {
@@ -127,3 +129,6 @@ int main()
 
     return 0;
 }
+
+// g++ -std=c++17 -O2 -Wall -Wextra fordfulkerson.cpp -o fordfulkerson
+// Get-Content input.txt -Raw | .\fordfulkerson.exe
