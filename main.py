@@ -98,6 +98,17 @@ def add_node(event):
             
     nodes.append(new_node)
 
+def delete_node():
+    global source_node, sink_node, editing_node
+    if editing_node in nodes:
+        if editing_node == source_node:
+            source_node = None
+        if editing_node == sink_node:
+            sink_node = None
+        nodes.remove(editing_node)
+        print(f"Node at {editing_node.center} deleted")
+        editing_node = None
+
 # Graphical Function definitions
 def draw_scene():
     screen.fill(BG_COLOR)  # Fill screen with charcoal Black
@@ -128,6 +139,9 @@ while running:
             elif event.key == pygame.K_k and editing_node:
                 sink_node = editing_node
                 print(f"Sink node set at {sink_node.center}")
+            
+            elif (event.key == pygame.K_DELETE or event.key == pygame.K_BACKSPACE) and editing_node:
+                delete_node()
 
             editing_node = None
 
