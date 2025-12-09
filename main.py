@@ -1,66 +1,113 @@
 import pygame
+
 # Initialize Pygame
 pygame.init()
+
 # Create a display window
 screen = pygame.display.set_mode((1400, 800))
 pygame.display.set_caption("Ford Fulkerson Algorithm Visualization")
 
-# Game loop
-running = True
-clock = pygame.time.Clock()
+# Constant definitions
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+BLUE = (0, 0, 255)
+BG_COLOR = (54, 69, 79)
+BLACK = (0, 0, 0)
+GRAY = (128, 128, 128)
+WHITE = (255, 255, 255)
+NODE_RADIUS = 20
 
-class GraphObject:
-    def __init__(self, x, y, width, height, color):
-        self.rect = pygame.Rect(x, y, width, height)
-        self.color = color
+# Variables
+editing_node = None
+moving_node = None
 
-    def draw(self, surface):
-        pygame.draw.rect(surface, self.color, self.rect)
+source_node = None
+sink_node = None
 
+nodes = []
+
+# Class definitions
 class Node:
-    def __init__(self, x, y, radius, color):
+    def __init__(self, x, y, radius):
         self.center = (x, y)
         self.radius = radius
-        self.color = color
 
     def draw(self, surface):
-        pygame.draw.circle(surface, self.color, self.center, self.radius)
+        pygame.draw.circle(surface, BLACK, self.center, self.radius+2) # Draw border
+        col = WHITE
+        if self == moving_node:
+            col = GREEN
+        elif self == editing_node:
+            col = GRAY
+        elif self == source_node:
+            col = BLUE
+        elif self == sink_node:
+            col = RED
+        pygame.draw.circle(surface, col, self.center, self.radius) # Draw node
 
-objs = [
-]
+# Logic Function definitions
 
-node_color = [(0, 0, 255),(255,0,0), (255,255,255)]
+# Helpers
+def collides(node_a, node_b):
+    dist = ((node_a.center[0] - node_b.center[0]) ** 2 + (node_a.center[1] - node_b.center[1]) ** 2) ** 0.5
+    return dist < node_a.radius + node_b.radius + 5
 
-def draw_scene():
-    screen.fill((54, 69, 79))  # Fill screen with charcoal Black
-    for obj in objs:
-        obj.draw(screen)
-
-def add_node(event):
-    x, y = event.pos
-    new_node = Node(x, y, 20, node_color[min(len(objs),2)])
-    for obj in objs:
-        if isinstance(obj, Node):
-            dist = ((obj.center[0] - x) ** 2 + (obj.center[1] - y) ** 2) ** 0.5
-            if dist < obj.radius + new_node.radius:
-                return  # Prevent overlapping nodes
-            
-    objs.append(new_node)
-
-def select_node(event):
-    for obj in objs:
+def get_node_selected(event):
+    for node in nodes:
         # Unpack center coordinates
-        cx, cy = obj.center
+        cx, cy = node.center
         
         # Calculate distance from click to center
         dx = event.pos[0] - cx
         dy = event.pos[1] - cy
         distance = (dx**2 + dy**2)**0.5
         
-        if distance < obj.radius:
-            print(f"Node at {obj.center} selected")
-            obj.color = (0, 255, 0)
+        if distance < node.radius:
+            print(f"Node at {node.center} selected")
+            return node
+    return None
 
+
+def update_node_position():
+    global moving_node
+    is_collision = False
+    
+    if moving_node:
+        mx, my = pygame.mouse.get_pos()
+        
+        temp_node = Node(mx, my, moving_node.radius)
+        for node in nodes:
+            if node != moving_node and collides(node, temp_node):
+                is_collision = True
+                break
+        
+        if not is_collision:
+            moving_node.center = (mx, my)
+
+        if not pygame.mouse.get_pressed()[0]:  # Left mouse button released
+            moving_node = None
+
+
+# UI Methods
+def add_node(event):
+    x, y = event.pos
+    new_node = Node(x, y, NODE_RADIUS)
+    for node in nodes:
+        if collides(node, new_node):
+            return
+            
+    nodes.append(new_node)
+
+# Graphical Function definitions
+def draw_scene():
+    screen.fill(BG_COLOR)  # Fill screen with charcoal Black
+    for node in nodes:
+        node.draw(screen)
+
+# ========================== Game loop ========================== #
+
+running = True
+clock = pygame.time.Clock()
 
 while running:
     for event in pygame.event.get():
@@ -68,10 +115,25 @@ while running:
             running = False
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:  # Left mouse button
-                add_node(event)
+                editing_node = moving_node = get_node_selected(event)
+
             elif event.button == 3:  # Right mouse button
-                select_node(event)
+                add_node(event)
+
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_s and editing_node:
+                source_node = editing_node
+                print(f"Source node set at {source_node.center}")
+
+            elif event.key == pygame.K_k and editing_node:
+                sink_node = editing_node
+                print(f"Sink node set at {sink_node.center}")
+
+            editing_node = None
+
+        update_node_position()
     
+    # Draw everything
     draw_scene()
     pygame.display.flip()
     clock.tick(60)  # 60 FPS
