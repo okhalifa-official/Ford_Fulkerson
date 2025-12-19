@@ -1,6 +1,7 @@
 import pygame
 import math
 from collections import deque
+from numpy import interp
 
 pygame.init()
 info = pygame.display.Info()
@@ -14,6 +15,12 @@ WHITE, YELLOW, ORANGE = (255, 255, 255), (255, 220, 0), (255, 140, 0)
 CYAN, PURPLE = (0, 255, 255), (180, 0, 255)
 NODE_RADIUS = 25
 
+EDGE_RED = (255, 50, 50)
+EDGE_GREY = (100, 100, 120)
+
+min_capacity = float('inf')
+max_capacity = 0
+
 # State variables
 editing_node = moving_node = edge_start_node = selected_edge = pending_edge = None
 input_text, input_active = "", False
@@ -24,6 +31,9 @@ current_path, particles, augment_history = None, [], []
 nodes, edges = [], []
 animation_time = 0
 _results_close_rect = None
+
+current_path = []
+current_edge_index = 0
 
 class Node:
     def __init__(self, x, y, radius):
@@ -63,19 +73,24 @@ class Edge:
         start_pos, end_pos = self.node_from.center, self.node_to.center
         
         if self.flow == 0:
-            color = (100, 100, 120)
+            color = EDGE_GREY
         elif self.flow == self.capacity:
-            color = (255, 50, 50)
+            color = EDGE_RED
         else:
+            # the color transitions from yellow to red as flow approaches capacity
             ratio = self.flow / self.capacity
-            color = (255, int(255 - 100 * ratio), int(255 - 255 * ratio))
+            color = (255, int(255 - 155 * ratio), int(255 - 255 * ratio))
+            
         
         if self == selected_edge:
             color = ORANGE
+            line_width = 3
+        else:
+            line_width = 2
         
-        line_width = 3 if self == selected_edge else 2
         pygame.draw.line(surface, color, start_pos, end_pos, line_width)
 
+        # Draw arrowhead
         angle = math.atan2(end_pos[1] - start_pos[1], end_pos[0] - start_pos[0])
         arrow_end = (end_pos[0] - self.node_to.radius * math.cos(angle), 
                     end_pos[1] - self.node_to.radius * math.sin(angle))
@@ -101,25 +116,35 @@ class Edge:
         surface.blit(text, text_rect)
 
 class Particle:
-    def __init__(self, edge, t=0.0, speed=0.01, color=CYAN):
-        self.edge, self.t, self.speed, self.color = edge, t, speed, color
+    def __init__(self, edge, t=0.0, speed=0.03, color=CYAN, radius=2):
+        self.edge, self.t, self.speed, self.color, self.radius = edge, t, speed, color, radius
 
     def update(self, dt):
+        # update time of travel along edge
+        # t is percentage of edge traveled (0.0 to 1.0)
         self.t += self.speed * dt
+
+        # return whether particle hasn't finished its path
         return self.t <= 1.0
 
     def draw(self, surface):
+        # get position of first node and second node
         x1, y1 = self.edge.node_from.center
         x2, y2 = self.edge.node_to.center
-        px, py = x1 + (x2 - x1) * self.t, y1 + (y2 - y1) * self.t
-        
+
+        # calculate current position along edge
+        px = x1 + (x2 - x1) * self.t
+        py = y1 + (y2 - y1) * self.t
+
+        # draw glow effect
         for i in range(2):
-            glow_size = 5 + (2 - i) * 2
+            glow_size = self.radius + (2 - i)
             glow_surf = pygame.Surface((glow_size * 2, glow_size * 2), pygame.SRCALPHA)
             pygame.draw.circle(glow_surf, (*self.color, 100 - i * 50), (glow_size, glow_size), glow_size)
             surface.blit(glow_surf, (int(px - glow_size), int(py - glow_size)))
         
-        pygame.draw.circle(surface, self.color, (int(px), int(py)), 5)
+        # draw particle
+        pygame.draw.circle(surface, self.color, (int(px), int(py)), self.radius)
 
 def collides(node_a, node_b):
     return math.hypot(node_a.center[0] - node_b.center[0], node_a.center[1] - node_b.center[1]) < node_a.radius + node_b.radius + 5
@@ -195,6 +220,7 @@ def path_exists():
     return False
 
 def find_augmenting_path():
+    global min_capacity, max_capacity
     if not source_node or not sink_node:
         return None, 0
     parent, q, visited = {}, deque([source_node]), {source_node}
@@ -204,12 +230,17 @@ def find_augmenting_path():
         if u == sink_node:
             break
         for e in edges:
+            # forward edge
             if e.node_from == u and e.capacity - e.flow > 0:
                 if e.node_to not in visited:
                     visited.add(e.node_to)
                     parent[e.node_to] = (u, e, False)
                     q.append(e.node_to)
+                max_capacity = max(max_capacity, e.capacity)
+                min_capacity = min(min_capacity, e.capacity)
+        
         for e in edges:
+            # reverse edge (residual capacity)
             if e.node_to == u and e.flow > 0:
                 if e.node_from not in visited:
                     visited.add(e.node_from)
@@ -229,21 +260,28 @@ def find_augmenting_path():
     bottleneck = min((e.flow if is_rev else e.capacity - e.flow) for e, is_rev in path)
     return path, int(bottleneck)
 
-def apply_augmentation(path, delta):
+def apply_augmentation(path, bottleneck):
     for e, is_rev in path:
-        e.flow += -delta if is_rev else delta
+        if is_rev:
+            e.flow -= bottleneck
+        else:
+            e.flow += bottleneck
 
-def spawn_particles(path, amount):
-    for e, is_rev in path:
-        if not is_rev:
-            for i in range(min(8, max(2, amount))):
-                particles.append(Particle(e, i / max(1, amount) * 0.3, 
+
+def spawn_particles(e, is_rev):
+    if not is_rev:
+        amount = int(interp(e.flow, [min_capacity, max_capacity], [2, 6]))
+        print(amount)
+        for i in range(amount):
+            particles.append(Particle(e, i * 0.02 * speed_multiplier, 
                                         0.02 * speed_multiplier, CYAN))
-
 def add_node(pos):
+    global source_node, sink_node
     new_node = Node(pos[0], pos[1], NODE_RADIUS)
     if not any(collides(n, new_node) for n in nodes):
         nodes.append(new_node)
+    if len(nodes) == 1:
+        source_node = nodes[0]
 
 def delete_node():
     global source_node, sink_node, editing_node
@@ -288,6 +326,8 @@ def reset_simulation():
 
 def draw_scene():
     global animation_time
+    global current_edge_index
+    global current_path
     animation_time += 1
     screen.fill(BG_COLOR)
     
@@ -300,37 +340,54 @@ def draw_scene():
     for edge in edges:
         edge.draw(screen)
     
-    if current_path:
-        for e, is_rev in current_path:
-            pulse = int(math.sin(animation_time * 0.1) * 2 + 6)
-            if is_rev:
-                draw_dashed_line(screen, (255, 120, 120), e.node_to.center, e.node_from.center, pulse, 12)
-            else:
-                pygame.draw.line(screen, (0, 220, 255), e.node_from.center, e.node_to.center, pulse)
+    # draw pulse on edges in current path
+    # if current_path:
+    #     for e, is_rev in current_path:
+    #         pulse = int(math.sin(animation_time * 0.1) * 2 + 6)
+            # if is_rev:
+            #     print("reverse edge pulse")
+            #     # draw_dashed_line(screen, (255, 120, 120), e.node_to.center, e.node_from.center, pulse, 12)
+            # else:
+            #     pygame.draw.line(screen, (0, 220, 255), e.node_from.center, e.node_to.center, pulse)
     
+    
+    
+    # for e in edges:
+    #     if e.flow > 0:
+    #         draw_dashed_line(screen, (140, 140, 140), e.node_to.center, e.node_from.center, 2, 8)
+    
+    dt = clock.get_time() / 16.0
+
+    # Update and draw active particles
+    for p in particles:
+        if p.update(dt):
+            p.draw(screen)
+
+
+    # Clean up finished particles and advance edge index
+    if current_path:
+        for p in particles:  # iterate over copy
+            if p.t >= 1.0:
+                if current_edge_index < len(current_path):
+                    edge, is_rev = current_path[current_edge_index]
+                    if p.edge == edge:
+                        current_edge_index += 1
+                particles.remove(p)
+    
+    for node in nodes:
+        node.draw(screen)
+
     for edge in edges:
         edge.draw_label(screen)
     
     if edge_start_node and pygame.mouse.get_pressed()[2]:
         draw_dashed_line(screen, YELLOW, edge_start_node.center, pygame.mouse.get_pos(), 3, 15)
     
-    for node in nodes:
-        node.draw(screen)
-    
     if input_active:
         draw_input_dialog()
     
     draw_controls()
-    
-    for e in edges:
-        if e.flow > 0:
-            draw_dashed_line(screen, (140, 140, 140), e.node_to.center, e.node_from.center, 2, 8)
-    
-    dt = clock.get_time() / 16.0
-    for p in [p for p in particles if p.update(dt)]:
-        p.draw(screen)
-    particles[:] = [p for p in particles if p.t <= 1.0]
-    
+
     if simulation_done:
         draw_results()
     elif not nodes and not input_active:
@@ -339,8 +396,8 @@ def draw_scene():
 def draw_instructions():
     font, y = pygame.font.Font(None, 28), screen.get_height() // 2 - 100
     for text in ["Right-click: Add nodes", "Right-click & drag: Create edges", 
-                 "Left-click: Select", "Drag to move", "S: Set source", "K: Set sink", 
-                 "Delete: Remove"]:
+                "Left-click: Select", "Drag to move", "S: Set source", "K: Set sink", 
+                "Delete: Remove"]:
         rendered = font.render(text, True, (150, 160, 180))
         rect = rendered.get_rect(center=(screen.get_width() // 2, y))
         shadow = font.render(text, True, BLACK)
@@ -544,8 +601,12 @@ while running:
         
         if event.type == pygame.KEYDOWN and not input_active:
             if event.key == pygame.K_s and editing_node:
+                if sink_node == editing_node:
+                    sink_node = None
                 source_node = editing_node
             elif event.key == pygame.K_k and editing_node:
+                if source_node == editing_node:
+                    source_node = None
                 sink_node = editing_node
             elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE):
                 if editing_node:
@@ -562,23 +623,39 @@ while running:
     if not input_active:
         if not augmenting and (playing or step_requested):
             path, bottleneck = find_augmenting_path()
+            # no more augmenting paths
             if not path:
                 playing, step_requested, simulation_done = False, False, True
-                total_flow = sum(e.flow for e in edges if e.node_from == source_node) if source_node else 0
+                # calculate total flow
+                total_flow = 0
+                if source_node:
+                    for e in edges:
+                        if e.node_from == source_node:
+                            total_flow += e.flow
             else:
+                # start animation for this path
                 current_path, current_bottleneck, augmenting = path, bottleneck, True
                 augment_progress = 0.0
-                spawn_particles(path, bottleneck)
+                current_edge_index = 0
+                edge, is_rev = current_path[current_edge_index]
+                spawn_particles(edge, is_rev)
         
         if augmenting:
-            augment_progress += 0.03 * speed_multiplier * frame_dt
+            # augment_progress += (0.03/len(current_path)) * speed_multiplier * frame_dt
             if current_path:
-                spawn_particles(current_path, max(1, int(current_bottleneck / 2)))
+                if current_edge_index < len(current_path):
+                    edge, is_rev = current_path[current_edge_index]
+                    spawn_particles(edge, is_rev)
             
-            if augment_progress >= 1.0:
+            if len(particles) == 0:
                 if current_path:
-                    augment_history.append(([(e.node_from.center, e.node_to.center, is_rev) 
-                                            for e, is_rev in current_path], current_bottleneck))
+                    augment_history.append(
+                                                (
+                                                    [
+                                                        (e.node_from.center, e.node_to.center, is_rev) for e, is_rev in current_path
+                                                    ]
+                                                , current_bottleneck)
+                                            )
                 apply_augmentation(current_path, current_bottleneck)
                 augmenting, augment_progress, current_path = False, 0.0, None
                 if step_requested:
