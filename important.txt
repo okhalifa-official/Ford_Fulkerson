@@ -1,0 +1,19 @@
+Strategy: Greedy (augmenting path)
+Algorithm: Ford-Fulkerson
+Problem: Maximum Flow in Network
+
+Real-life applications:
+    - Bipartite Graph Matching
+    - Data flow in network
+    - Flow distribution
+    - Image segmentation (separate background from foreground)
+    - Efficient transportation flow
+    - Chemical reaction pathways
+
+Complexity:
+    Space: O(V+E)
+    Time: O(VE²)
+
+
+
+    

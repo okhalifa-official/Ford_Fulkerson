@@ -3,6 +3,20 @@ import math
 from collections import deque
 from numpy import interp
 
+pygame.mixer.init()
+pygame.mixer.pre_init(44100, -16, 2, 512)
+sfx_addnode = pygame.mixer.Sound("addnode.mp3")
+sfx_delnode = pygame.mixer.Sound("delnode.mp3")
+sfx_addedge = pygame.mixer.Sound("addedge.mp3")
+sfx_deledge = pygame.mixer.Sound("deledge.wav")
+sfx_flow = pygame.mixer.Sound("flow.mp3")
+sfx_tada = pygame.mixer.Sound("tada.mp3")
+sfx_denied = pygame.mixer.Sound("denied.wav")
+sfx_popup = pygame.mixer.Sound("popup.wav")
+sfx_select = pygame.mixer.Sound("select.mp3")
+sfx_click = pygame.mixer.Sound("click.mp3")
+sfx_outro = pygame.mixer.Sound("outro.mp3")
+
 pygame.init()
 info = pygame.display.Info()
 screen = pygame.display.set_mode((info.current_w, info.current_h), pygame.FULLSCREEN)
@@ -14,7 +28,6 @@ BG_COLOR, BLACK, GRAY = (25, 30, 40), (0, 0, 0), (128, 128, 128)
 WHITE, YELLOW, ORANGE = (255, 255, 255), (255, 220, 0), (255, 140, 0)
 CYAN, PURPLE = (0, 255, 255), (180, 0, 255)
 NODE_RADIUS = 25
-
 EDGE_RED = (255, 50, 50)
 EDGE_GREY = (100, 100, 120)
 
@@ -27,7 +40,7 @@ input_text, input_active = "", False
 source_node = sink_node = None
 playing = play_used = step_requested = augmenting = simulation_done = False
 speed_multiplier, augment_progress, current_bottleneck, total_flow = 1.0, 0.0, 0, 0
-current_path, particles, augment_history = None, [], []
+particles, augment_history = [], []
 nodes, edges = [], []
 animation_time = 0
 _results_close_rect = None
@@ -39,21 +52,35 @@ class Node:
     def __init__(self, x, y, radius):
         self.center, self.radius = (x, y), radius
 
-    def draw(self, surface):
+    def draw(self, surface, i):
         # Glow for source/sink
         if self == source_node or self == sink_node:
-            glow_color = BLUE if self == source_node else RED
+            if self == sink_node:
+                glow_color = RED
+            else:
+                glow_color = BLUE
+
             for i in range(3):
                 glow_radius = self.radius + 8 - i * 2
                 glow_surf = pygame.Surface((glow_radius * 2, glow_radius * 2), pygame.SRCALPHA)
                 pygame.draw.circle(glow_surf, (*glow_color, 60 - i * 20), (glow_radius, glow_radius), glow_radius)
                 surface.blit(glow_surf, (self.center[0] - glow_radius, self.center[1] - glow_radius))
         
+        # Draw node border
         pygame.draw.circle(surface, BLACK, self.center, self.radius + 3)
         
-        col = (GREEN if self == moving_node else GRAY if self == editing_node else 
-               BLUE if self == source_node else RED if self == sink_node else 
-               YELLOW if self == edge_start_node else WHITE)
+        if self == moving_node:
+            col = GREEN
+        elif self == editing_node:
+            col = GRAY
+        elif self == source_node:
+            col = BLUE
+        elif self == sink_node:
+            col = RED
+        elif self == edge_start_node:
+            col = YELLOW
+        else:
+            col = WHITE
         
         pygame.draw.circle(surface, col, self.center, self.radius)
         pygame.draw.circle(surface, tuple(min(255, c + 40) for c in col), 
@@ -61,7 +88,12 @@ class Node:
         
         if self == source_node or self == sink_node:
             font = pygame.font.Font(None, 20)
-            text = font.render("S" if self == source_node else "T", True, WHITE)
+            text = font.render("SRC" if self == source_node else "SNK", True, WHITE)
+            surface.blit(text, text.get_rect(center=self.center))
+        else:
+            font = pygame.font.Font(None, 20)
+            s = str(i)
+            text = font.render(s, True, BLACK)
             surface.blit(text, text.get_rect(center=self.center))
 
 class Edge:
@@ -135,13 +167,6 @@ class Particle:
         # calculate current position along edge
         px = x1 + (x2 - x1) * self.t
         py = y1 + (y2 - y1) * self.t
-
-        # draw glow effect
-        for i in range(2):
-            glow_size = self.radius + (2 - i)
-            glow_surf = pygame.Surface((glow_size * 2, glow_size * 2), pygame.SRCALPHA)
-            pygame.draw.circle(glow_surf, (*self.color, 100 - i * 50), (glow_size, glow_size), glow_size)
-            surface.blit(glow_surf, (int(px - glow_size), int(py - glow_size)))
         
         # draw particle
         pygame.draw.circle(surface, self.color, (int(px), int(py)), self.radius)
@@ -152,6 +177,7 @@ def collides(node_a, node_b):
 def get_node_at_pos(pos):
     for node in nodes:
         if math.hypot(pos[0] - node.center[0], pos[1] - node.center[1]) < node.radius:
+            sfx_select.play()
             return node
     return None
 
@@ -165,6 +191,7 @@ def get_edge_selected(pos):
         t = max(0, min(1, ((pos[0] - x1) * (x2 - x1) + (pos[1] - y1) * (y2 - y1)) / line_len_sq))
         proj = (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
         if math.hypot(pos[0] - proj[0], pos[1] - proj[1]) < 12:
+            sfx_select.play()
             return edge
     return None
 
@@ -268,10 +295,11 @@ def apply_augmentation(path, bottleneck):
             e.flow += bottleneck
 
 
-def spawn_particles(e, is_rev):
+def spawn_particles(e, is_rev, max_value, bottleneck):
+    global max_num_particles
     if not is_rev:
-        amount = int(interp(e.flow, [min_capacity, max_capacity], [2, 6]))
-        print(amount)
+        max_num_particles = max_value = min(max_value, e.capacity)
+        amount = int(interp(max(max_value, bottleneck), [min_capacity, max_capacity], [2, 6]))
         for i in range(amount):
             particles.append(Particle(e, i * 0.02 * speed_multiplier, 
                                         0.02 * speed_multiplier, CYAN))
@@ -280,6 +308,7 @@ def add_node(pos):
     new_node = Node(pos[0], pos[1], NODE_RADIUS)
     if not any(collides(n, new_node) for n in nodes):
         nodes.append(new_node)
+        sfx_addnode.play()
     if len(nodes) == 1:
         source_node = nodes[0]
 
@@ -293,23 +322,29 @@ def delete_node():
         edges[:] = [e for e in edges if e.node_from != editing_node and e.node_to != editing_node]
         nodes.remove(editing_node)
         editing_node = None
+        sfx_delnode.play()
 
 def delete_edge():
     global selected_edge
     if selected_edge in edges:
         edges.remove(selected_edge)
         selected_edge = None
+        sfx_deledge.play()
 
 def add_edge(node_from, node_to):
     global pending_edge, input_active, input_text
     if not any(e.node_from == node_from and e.node_to == node_to for e in edges):
         pending_edge, input_active, input_text = {'from': node_from, 'to': node_to}, True, ""
+        sfx_popup.play()
 
 def confirm_edge():
     global pending_edge, input_active, input_text
     if pending_edge and input_text.isdigit() and int(input_text) > 0:
         edges.append(Edge(pending_edge['from'], pending_edge['to'], int(input_text)))
-    pending_edge, input_active, input_text = None, False, ""
+        pending_edge, input_active, input_text = None, False, ""
+        sfx_addedge.play()
+    else:
+        sfx_denied.play()
 
 def cancel_edge():
     global pending_edge, input_active, input_text
@@ -340,22 +375,6 @@ def draw_scene():
     for edge in edges:
         edge.draw(screen)
     
-    # draw pulse on edges in current path
-    # if current_path:
-    #     for e, is_rev in current_path:
-    #         pulse = int(math.sin(animation_time * 0.1) * 2 + 6)
-            # if is_rev:
-            #     print("reverse edge pulse")
-            #     # draw_dashed_line(screen, (255, 120, 120), e.node_to.center, e.node_from.center, pulse, 12)
-            # else:
-            #     pygame.draw.line(screen, (0, 220, 255), e.node_from.center, e.node_to.center, pulse)
-    
-    
-    
-    # for e in edges:
-    #     if e.flow > 0:
-    #         draw_dashed_line(screen, (140, 140, 140), e.node_to.center, e.node_from.center, 2, 8)
-    
     dt = clock.get_time() / 16.0
 
     # Update and draw active particles
@@ -373,9 +392,9 @@ def draw_scene():
                     if p.edge == edge:
                         current_edge_index += 1
                 particles.remove(p)
-    
-    for node in nodes:
-        node.draw(screen)
+
+    for i, node in enumerate(nodes):
+        node.draw(screen, i)
 
     for edge in edges:
         edge.draw_label(screen)
@@ -390,6 +409,7 @@ def draw_scene():
 
     if simulation_done:
         draw_results()
+
     elif not nodes and not input_active:
         draw_instructions()
 
@@ -521,7 +541,16 @@ def draw_results():
     for i, (path_repr, delta) in enumerate(entries):
         col_x = x + 20 if i % 2 == 0 else x + w // 2 + 10
         global_idx = start_index + i + 1
-        txt = f"Step {global_idx}: +{delta}  ({len(path_repr)} edges)"
+        
+        # Extract node sequence from path
+        node_sequence = []
+        for from_idx, to_idx, is_rev in path_repr:
+            if not node_sequence:
+                node_sequence.append(from_idx)
+            node_sequence.append(to_idx)
+        
+        path_str = " -> ".join(map(str, node_sequence))
+        txt = f"Step {global_idx}: +{delta}  ({path_str})"
         screen.blit(font.render(txt, True, WHITE), (col_x, y_pos + (i//2) * 26))
     
     ok_rect = pygame.Rect(x + w - 120, y + h - 50, 100, 36)
@@ -552,7 +581,7 @@ while running:
                     input_text += event.unicode
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 rects = draw_input_dialog()
-                if rects['ok'].collidepoint(event.pos) and input_text.isdigit() and int(input_text) > 0:
+                if rects['ok'].collidepoint(event.pos):
                     confirm_edge()
                 elif rects['cancel'].collidepoint(event.pos):
                     cancel_edge()
@@ -560,17 +589,30 @@ while running:
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:
                 rects = get_control_rects()
-                if rects['play'].collidepoint(event.pos) and not (play_used or simulation_done) and path_exists():
-                    playing, play_used = True, True
-                elif rects['step'].collidepoint(event.pos) and path_exists():
-                    step_requested = True
+                if rects['play'].collidepoint(event.pos):
+                    if not (play_used or simulation_done) and path_exists():
+                        sfx_click.play()
+                        playing, play_used = True, True
+                    else:
+                        sfx_denied.play()
+                elif rects['step'].collidepoint(event.pos):
+                    if path_exists():
+                        sfx_click.play()
+                        step_requested = True
+                    else:
+                        sfx_denied.play()
                 elif rects['quit'].collidepoint(event.pos):
+                    sfx_outro.play()
+                    pygame.time.delay(3000)
                     running = False
                 elif rects['reset'].collidepoint(event.pos):
+                    sfx_click.play()
                     reset_simulation()
                 elif rects['minus'].collidepoint(event.pos):
+                    sfx_addnode.play()
                     speed_multiplier = max(0.25, speed_multiplier / 2)
                 elif rects['plus'].collidepoint(event.pos):
+                    sfx_addnode.play()
                     speed_multiplier = min(4.0, speed_multiplier * 2)
                 else:
                     node = get_node_at_pos(event.pos)
@@ -621,11 +663,15 @@ while running:
     
     # Simulation
     frame_dt = clock.get_time() / 16.0
+    spawned = {}
     if not input_active:
         if not augmenting and (playing or step_requested):
+            sfx_flow.play()
             path, bottleneck = find_augmenting_path()
             # no more augmenting paths
             if not path:
+                sfx_flow.stop()
+                sfx_tada.play()
                 playing, step_requested, simulation_done = False, False, True
                 # calculate total flow
                 total_flow = 0
@@ -639,21 +685,26 @@ while running:
                 augment_progress = 0.0
                 current_edge_index = 0
                 edge, is_rev = current_path[current_edge_index]
-                spawn_particles(edge, is_rev)
+                max_num_particles = float('inf')
+                spawn_particles(edge, is_rev, max_num_particles, current_bottleneck)
+                spawned[edge] = True
         
         if augmenting:
             # augment_progress += (0.03/len(current_path)) * speed_multiplier * frame_dt
             if current_path:
                 if current_edge_index < len(current_path):
                     edge, is_rev = current_path[current_edge_index]
-                    spawn_particles(edge, is_rev)
+                    if spawned.get(edge) is None:
+                        spawn_particles(edge, is_rev, max_num_particles, current_bottleneck)
+                        spawned[edge] = True
             
             if len(particles) == 0:
+                sfx_flow.stop()
                 if current_path:
                     augment_history.append(
                                                 (
                                                     [
-                                                        (e.node_from.center, e.node_to.center, is_rev) for e, is_rev in current_path
+                                                        (nodes.index(e.node_from), nodes.index(e.node_to), is_rev) for e, is_rev in current_path
                                                     ]
                                                 , current_bottleneck)
                                             )
@@ -661,6 +712,7 @@ while running:
                 augmenting, augment_progress, current_path = False, 0.0, None
                 if step_requested:
                     playing, step_requested = False, False
+                    sfx_flow.stop()
     
     draw_scene()
     pygame.display.flip()
