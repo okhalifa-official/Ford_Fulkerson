@@ -420,7 +420,8 @@ def draw_controls():
     screen.blit(play_surf, play_rect)
     
     # Step
-    pygame.draw.rect(screen, (70, 130, 200), rects['step'], border_radius=6)
+    Step_color = (70, 130, 200) if enabled else (80, 80, 80)
+    pygame.draw.rect(screen, Step_color, rects['step'], border_radius=6)
     pygame.draw.rect(screen, WHITE, rects['step'], 2, border_radius=6)
     step_surf = font.render("Step", True, WHITE)
     step_rect = step_surf.get_rect(center=rects['step'].center)
@@ -561,7 +562,7 @@ while running:
                 rects = get_control_rects()
                 if rects['play'].collidepoint(event.pos) and not (play_used or simulation_done) and path_exists():
                     playing, play_used = True, True
-                elif rects['step'].collidepoint(event.pos):
+                elif rects['step'].collidepoint(event.pos) and path_exists():
                     step_requested = True
                 elif rects['quit'].collidepoint(event.pos):
                     running = False
